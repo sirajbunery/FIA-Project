@@ -152,10 +152,10 @@ router.get('/history', async (req: Request, res: Response, next: NextFunction) =
       success: true,
       history: history.map(session => ({
         sessionId: session.id,
-        visaType: session.visa_type,
-        destinationCountry: session.destination_country,
-        date: session.start_time,
-        score: session.overall_score,
+        visaType: session.visaType,
+        destinationCountry: session.destinationCountry,
+        date: session.startTime,
+        score: session.overallScore,
         passed: session.passed,
       })),
     });

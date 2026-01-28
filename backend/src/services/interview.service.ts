@@ -536,7 +536,20 @@ export class InterviewService {
         return [];
       }
 
-      return data || [];
+      // Transform snake_case database columns to camelCase interface
+      return (data || []).map((row: Record<string, unknown>) => ({
+        id: row.id as string,
+        visaType: row.visa_type as InterviewVisaType,
+        destinationCountry: row.destination_country as string,
+        startTime: row.start_time as string,
+        endTime: row.end_time as string | undefined,
+        totalQuestions: row.total_questions as number,
+        questionsAsked: (row.questions_asked as QuestionAnswer[]) || [],
+        overallScore: row.overall_score as number,
+        passed: row.passed as boolean,
+        feedback: row.feedback as string,
+        improvements: (row.improvements as string[]) || [],
+      }));
     } catch (err) {
       logger.error('Database query failed:', err);
       return [];
