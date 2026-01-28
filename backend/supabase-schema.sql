@@ -244,3 +244,44 @@ CREATE TRIGGER update_sessions_updated_at
 -- Storage policy for documents bucket
 -- CREATE POLICY "Service role can access documents" ON storage.objects
 --   FOR ALL USING (bucket_id = 'documents' AND auth.role() = 'service_role');
+
+-- ============================================
+-- Add visa_type to validation_sessions (if not exists)
+-- Run this to update existing tables
+-- ============================================
+ALTER TABLE validation_sessions
+ADD COLUMN IF NOT EXISTS visa_type TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_sessions_visa_type ON validation_sessions(visa_type);
+
+-- ============================================
+-- Interview Sessions Table
+-- ============================================
+CREATE TABLE IF NOT EXISTS interview_sessions (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  visa_type TEXT NOT NULL,
+  destination_country TEXT NOT NULL,
+  start_time TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  end_time TIMESTAMPTZ,
+  total_questions INTEGER NOT NULL DEFAULT 10,
+  questions_asked JSONB DEFAULT '[]'::jsonb,
+  overall_score INTEGER DEFAULT 0,
+  passed BOOLEAN DEFAULT false,
+  feedback TEXT,
+  improvements JSONB DEFAULT '[]'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Indexes for interview sessions
+CREATE INDEX IF NOT EXISTS idx_interview_sessions_visa_type ON interview_sessions(visa_type);
+CREATE INDEX IF NOT EXISTS idx_interview_sessions_passed ON interview_sessions(passed);
+CREATE INDEX IF NOT EXISTS idx_interview_sessions_created ON interview_sessions(created_at);
+
+-- RLS for interview sessions
+ALTER TABLE interview_sessions ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Service role has full access to interview_sessions" ON interview_sessions
+  FOR ALL USING (auth.role() = 'service_role');
+
+CREATE POLICY "Anyone can read interview_sessions" ON interview_sessions
+  FOR SELECT USING (true);

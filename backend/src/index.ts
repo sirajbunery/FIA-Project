@@ -9,6 +9,7 @@ import validationRoutes from './routes/validation.routes';
 import whatsappRoutes from './routes/whatsapp.routes';
 import userRoutes from './routes/user.routes';
 import requirementsRoutes from './routes/requirements.routes';
+import interviewRoutes from './routes/interview.routes';
 import { errorHandler } from './middleware/errorHandler';
 
 const app = express();
@@ -48,6 +49,7 @@ app.use('/api/validate', validationRoutes);
 app.use('/api/whatsapp', whatsappRoutes);
 app.use('/api/user', userRoutes);
 app.use('/api/requirements', requirementsRoutes);
+app.use('/api/interview', interviewRoutes);
 
 // Error handling middleware
 app.use(errorHandler);
