@@ -13,22 +13,29 @@ const VALID_VISA_TYPES: InterviewVisaType[] = ['tourist', 'visit', 'family', 'wo
  * Start a new interview session
  */
 router.post('/start', async (req: Request, res: Response, next: NextFunction) => {
+  console.log('📥 /start request received:', req.body);
   try {
-    const { visaType, destinationCountry } = req.body;
+    const { visaType, destinationCountry, language } = req.body;
+
+    console.log('📝 Validating:', { visaType, destinationCountry, language });
 
     if (!visaType || !VALID_VISA_TYPES.includes(visaType)) {
+      console.error('❌ Invalid visa type:', visaType);
       throw createError('Invalid visa type. Must be one of: ' + VALID_VISA_TYPES.join(', '), 400);
     }
 
     if (!destinationCountry) {
+      console.error('❌ Missing destination country');
       throw createError('Destination country is required', 400);
     }
 
-    logger.info(`Starting interview for ${visaType} visa to ${destinationCountry}`);
+    console.log('✅ Validation passed, starting interview...');
+    logger.info(`Starting interview for ${visaType} visa to ${destinationCountry} (${language || 'english'})`);
 
     const { sessionId, firstQuestion, totalQuestions } = await interviewService.startInterview(
       visaType,
-      destinationCountry
+      destinationCountry,
+      language || 'english'
     );
 
     res.json({
@@ -53,7 +60,7 @@ router.post('/start', async (req: Request, res: Response, next: NextFunction) =>
  */
 router.post('/answer', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { sessionId, answer, responseTimeMs } = req.body;
+    const { sessionId, answer, responseTimeMs, language } = req.body;
 
     if (!sessionId) {
       throw createError('Session ID is required', 400);
@@ -63,20 +70,41 @@ router.post('/answer', async (req: Request, res: Response, next: NextFunction) =
       throw createError('Answer is required and must be a string', 400);
     }
 
+    console.log('📥 Answer received:', { sessionId, answer: answer.substring(0, 50), responseTimeMs, language });
+
     const result = await interviewService.submitAnswer(
       sessionId,
       answer.trim(),
-      responseTimeMs || 0
+      responseTimeMs || 0,
+      language || 'english'
     );
+
+    console.log('📤 Service response - aiPowered:', result.aiPowered, 'score:', result.scores.total);
 
     const response: any = {
       success: true,
       questionNumber: result.questionNumber,
       scores: result.scores,
       feedback: result.feedback,
+      feedbackUrdu: result.feedbackUrdu,
       flagged: result.flagged,
       isComplete: result.isComplete,
+      aiPowered: result.aiPowered,
     };
+
+    // Include AI-specific fields
+    if (result.flags && result.flags.length > 0) {
+      response.flags = result.flags;
+    }
+    if (result.suggestions && result.suggestions.length > 0) {
+      response.suggestions = result.suggestions;
+    }
+    if (result.factCheck) {
+      response.factCheck = result.factCheck;
+    }
+    if (result.spellingErrors && result.spellingErrors.length > 0) {
+      response.spellingErrors = result.spellingErrors;
+    }
 
     if (result.flagReason) {
       response.flagReason = result.flagReason;
@@ -91,6 +119,7 @@ router.post('/answer', async (req: Request, res: Response, next: NextFunction) =
       };
     }
 
+    console.log('📤 Sending response with aiPowered:', response.aiPowered);
     res.json(response);
   } catch (error: any) {
     if (error.message === 'Session not found or expired') {
@@ -112,7 +141,9 @@ router.post('/end', async (req: Request, res: Response, next: NextFunction) => {
       throw createError('Session ID is required', 400);
     }
 
+    console.log('📥 Ending interview:', sessionId);
     const session = await interviewService.endInterview(sessionId);
+    console.log('📤 Final session - aiPowered:', session.aiPowered, 'score:', session.overallScore);
 
     res.json({
       success: true,
@@ -125,10 +156,14 @@ router.post('/end', async (req: Request, res: Response, next: NextFunction) => {
         overallScore: session.overallScore,
         passed: session.passed,
         feedback: session.feedback,
+        feedbackUrdu: session.feedbackUrdu,
         improvements: session.improvements,
+        strengths: session.strengths || [],
+        concerns: session.concerns || [],
         scoreBreakdown: calculateAverageScores(session.questionsAsked),
         flaggedAnswers: session.questionsAsked.filter(q => q.flagged).length,
         duration: calculateDuration(session.startTime, session.endTime || new Date().toISOString()),
+        aiPowered: session.aiPowered || false,
       },
     });
   } catch (error: any) {
@@ -161,6 +196,40 @@ router.get('/history', async (req: Request, res: Response, next: NextFunction) =
     });
   } catch (error) {
     next(error);
+  }
+});
+
+/**
+ * GET /api/interview/test-ai
+ * Test if Gemini AI is working
+ */
+router.get('/test-ai', async (req: Request, res: Response) => {
+  try {
+    const { geminiService } = await import('../services/gemini.service');
+    const isAvailable = geminiService.isAvailable();
+    const isVerified = geminiService.isVerified();
+    const isRateLimited = geminiService.isRateLimited();
+    const modelName = geminiService.getModelName();
+    const testResult = await geminiService.testEvaluation();
+
+    console.log('🧪 AI Test Result:', { isAvailable, isVerified, isRateLimited, modelName, testResult });
+
+    res.json({
+      success: true,
+      aiStatus: {
+        modelInitialized: isAvailable,
+        apiVerified: isVerified,
+        rateLimited: isRateLimited,
+        modelName,
+        testResult,
+      },
+    });
+  } catch (error: any) {
+    console.error('❌ AI test error:', error);
+    res.json({
+      success: false,
+      error: error?.message || 'Test failed',
+    });
   }
 });
 

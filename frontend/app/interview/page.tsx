@@ -1,10 +1,11 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import axios from 'axios';
 import Header from '@/components/Header';
 import Footer from '@/components/Footer';
+import { useVoiceInterview } from '@/hooks/useVoiceInterview';
 import {
   AlertTriangle,
   MessageCircle,
@@ -18,6 +19,12 @@ import {
   RotateCcw,
   Clock,
   TrendingUp,
+  Mic,
+  MicOff,
+  Volume2,
+  VolumeX,
+  Keyboard,
+  Sparkles,
 } from 'lucide-react';
 
 // Types
@@ -45,18 +52,31 @@ interface ChatMessage {
   timestamp: Date;
   scores?: ScoreBreakdown;
   feedback?: string;
+  feedbackUrdu?: string;
   flagged?: boolean;
+  aiPowered?: boolean;
+  flags?: string[];
+  suggestions?: string[];
+  factCheck?: { verified: boolean; issues: string[] };
+  spellingErrors?: string[];
 }
 
 interface FinalResult {
   overallScore: number;
   passed: boolean;
   feedback: string;
+  feedbackUrdu?: string;
   improvements: string[];
+  strengths?: string[];
+  concerns?: string[];
   scoreBreakdown: Omit<ScoreBreakdown, 'total'>;
   flaggedAnswers: number;
   duration: string;
+  aiPowered?: boolean;
 }
+
+type InterviewMode = 'text' | 'voice';
+type VoiceLanguage = 'en-US' | 'ur-PK';
 
 type Step = 'disclaimer' | 'setup' | 'interview' | 'result';
 
@@ -98,6 +118,52 @@ export default function InterviewPage() {
   const [finalResult, setFinalResult] = useState<FinalResult | null>(null);
   const [totalQuestions, setTotalQuestions] = useState(10);
 
+  // Voice mode state
+  const [interviewMode, setInterviewMode] = useState<InterviewMode>('text');
+  const [voiceLanguage, setVoiceLanguage] = useState<VoiceLanguage>('en-US');
+  const [autoSpeak, setAutoSpeak] = useState(true);
+  const [isAiPowered, setIsAiPowered] = useState(false);
+
+  // Voice hook
+  const {
+    isListening,
+    isSpeaking,
+    transcript,
+    interimTranscript,
+    isSupported: voiceSupported,
+    error: voiceError,
+    startListening,
+    stopListening,
+    speak,
+    stopSpeaking,
+    clearTranscript,
+  } = useVoiceInterview({
+    language: voiceLanguage,
+    onTranscript: (text) => {
+      console.log('📝 onTranscript received:', text);
+      console.log('📝 Current interview mode:', interviewMode);
+      if (interviewMode === 'voice') {
+        console.log('📝 Setting answer with voice text');
+        setAnswer(prev => {
+          const newAnswer = (prev + ' ' + text).trim();
+          console.log('📝 New answer:', newAnswer);
+          return newAnswer;
+        });
+      }
+    },
+    onError: (error) => {
+      console.error('🎤 Voice error:', error);
+    },
+  });
+
+  // Log voice state changes
+  useEffect(() => {
+    console.log('🎤 Voice state - isListening:', isListening, 'isSpeaking:', isSpeaking, 'voiceSupported:', voiceSupported);
+    if (voiceError) {
+      console.error('🎤 Voice error state:', voiceError);
+    }
+  }, [isListening, isSpeaking, voiceSupported, voiceError]);
+
   const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
 
   // Auto-scroll chat
@@ -128,6 +194,13 @@ export default function InterviewPage() {
       textUrdu,
       timestamp: new Date(),
     });
+
+    // Speak the text if voice mode is enabled
+    if (interviewMode === 'voice' && autoSpeak) {
+      const textToSpeak = voiceLanguage === 'ur-PK' && textUrdu ? textUrdu : text;
+      speak(textToSpeak, voiceLanguage === 'ur-PK' ? 'ur' : 'en');
+    }
+
     if (callback) callback();
   };
 
@@ -150,9 +223,13 @@ export default function InterviewPage() {
         'السلام علیکم۔ میں امیگریشن آفیسر ہوں۔ میں آپ سے کچھ سوالات پوچھوں گا۔ براہ کرم واضح جواب دیں۔'
       );
 
+      const interviewLanguage = voiceLanguage === 'ur-PK' ? 'urdu' : 'english';
+      console.log('🚀 Starting interview with:', { visaType: selectedVisa, destinationCountry: selectedCountry, language: interviewLanguage });
+
       const response = await axios.post(`${apiUrl}/api/interview/start`, {
         visaType: selectedVisa,
         destinationCountry: selectedCountry,
+        language: interviewLanguage,
       });
 
       if (response.data.success) {
@@ -164,11 +241,13 @@ export default function InterviewPage() {
 
         await simulateTyping(q.text, q.textUrdu);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to start interview:', err);
+      console.error('Error details:', err?.response?.data || err?.message);
+      const errorMsg = err?.response?.data?.error || err?.message || 'Unknown error';
       addMessage({
         type: 'system',
-        text: 'Failed to start interview. Please try again.',
+        text: `Failed to start interview: ${errorMsg}`,
         timestamp: new Date(),
       });
     } finally {
@@ -193,20 +272,46 @@ export default function InterviewPage() {
     setIsLoading(true);
 
     try {
+      const interviewLanguage = voiceLanguage === 'ur-PK' ? 'urdu' : 'english';
+      console.log('📤 Submitting answer:', { sessionId, answer: userAnswer.substring(0, 50), language: interviewLanguage });
+
       const response = await axios.post(`${apiUrl}/api/interview/answer`, {
         sessionId,
         answer: userAnswer,
         responseTimeMs,
+        language: interviewLanguage,
+      });
+
+      console.log('📥 Answer response:', {
+        aiPowered: response.data.aiPowered,
+        score: response.data.scores?.total,
+        hasFeedbackUrdu: !!response.data.feedbackUrdu,
+        flags: response.data.flags?.length || 0,
       });
 
       if (response.data.success) {
-        // Show feedback
+        // Track AI powered status
+        if (response.data.aiPowered) {
+          setIsAiPowered(true);
+        }
+
+        // Show feedback - use Urdu feedback for Urdu interviews
+        const feedbackText = interviewLanguage === 'urdu' && response.data.feedbackUrdu
+          ? response.data.feedbackUrdu
+          : response.data.feedback;
+
         addMessage({
           type: 'feedback',
-          text: response.data.feedback,
+          text: feedbackText,
+          textUrdu: response.data.feedbackUrdu,
           timestamp: new Date(),
           scores: response.data.scores,
           flagged: response.data.flagged,
+          aiPowered: response.data.aiPowered,
+          flags: response.data.flags,
+          suggestions: response.data.suggestions,
+          factCheck: response.data.factCheck,
+          spellingErrors: response.data.spellingErrors,
         });
 
         if (response.data.isComplete) {
@@ -393,7 +498,7 @@ export default function InterviewPage() {
             </div>
 
             {/* Country Selection */}
-            <div className="mb-8">
+            <div className="mb-6">
               <label className="block text-sm font-semibold text-gray-700 mb-3">
                 Destination Country (منزل کا ملک)
               </label>
@@ -412,6 +517,96 @@ export default function InterviewPage() {
                     <span className="text-xs font-medium text-gray-800">{country.name}</span>
                   </button>
                 ))}
+              </div>
+            </div>
+
+            {/* Interview Mode Selection */}
+            <div className="mb-6">
+              <label className="block text-sm font-semibold text-gray-700 mb-3">
+                Interview Mode (انٹرویو کا طریقہ)
+              </label>
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  onClick={() => setInterviewMode('text')}
+                  className={`p-4 rounded-xl border-2 transition-all text-center transform hover:scale-105
+                    ${interviewMode === 'text'
+                      ? 'border-beoe-primary bg-green-50 shadow-md'
+                      : 'border-gray-200 hover:border-green-300'
+                    }`}
+                >
+                  <Keyboard className="w-8 h-8 mx-auto mb-2 text-beoe-primary" />
+                  <span className="text-sm font-medium text-gray-800 block">Type Answers</span>
+                  <span className="text-xs text-gray-500 font-urdu">ٹائپ کریں</span>
+                </button>
+                <button
+                  onClick={() => setInterviewMode('voice')}
+                  disabled={!voiceSupported}
+                  className={`p-4 rounded-xl border-2 transition-all text-center transform hover:scale-105
+                    ${interviewMode === 'voice'
+                      ? 'border-beoe-primary bg-green-50 shadow-md'
+                      : 'border-gray-200 hover:border-green-300'
+                    }
+                    ${!voiceSupported ? 'opacity-50 cursor-not-allowed' : ''}`}
+                >
+                  <Mic className="w-8 h-8 mx-auto mb-2 text-beoe-primary" />
+                  <span className="text-sm font-medium text-gray-800 block">Voice Interview</span>
+                  <span className="text-xs text-gray-500 font-urdu">بول کر جواب دیں</span>
+                  {!voiceSupported && (
+                    <span className="text-xs text-red-500 block mt-1">Not supported in this browser</span>
+                  )}
+                </button>
+              </div>
+            </div>
+
+            {/* Voice Language Selection (shown only in voice mode) */}
+            {interviewMode === 'voice' && voiceSupported && (
+              <div className="mb-6">
+                <label className="block text-sm font-semibold text-gray-700 mb-3">
+                  Voice Language (زبان)
+                </label>
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    onClick={() => setVoiceLanguage('en-US')}
+                    className={`p-3 rounded-xl border-2 transition-all text-center
+                      ${voiceLanguage === 'en-US'
+                        ? 'border-beoe-primary bg-green-50'
+                        : 'border-gray-200 hover:border-green-300'
+                      }`}
+                  >
+                    <span className="text-lg">🇬🇧</span>
+                    <span className="text-sm font-medium text-gray-800 block">English</span>
+                  </button>
+                  <button
+                    onClick={() => setVoiceLanguage('ur-PK')}
+                    className={`p-3 rounded-xl border-2 transition-all text-center
+                      ${voiceLanguage === 'ur-PK'
+                        ? 'border-beoe-primary bg-green-50'
+                        : 'border-gray-200 hover:border-green-300'
+                      }`}
+                  >
+                    <span className="text-lg">🇵🇰</span>
+                    <span className="text-sm font-medium text-gray-800 block font-urdu">اردو</span>
+                  </button>
+                </div>
+                <div className="mt-3 flex items-center justify-center">
+                  <label className="flex items-center space-x-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={autoSpeak}
+                      onChange={(e) => setAutoSpeak(e.target.checked)}
+                      className="w-4 h-4 text-beoe-primary rounded"
+                    />
+                    <span className="text-sm text-gray-600">Auto-speak questions</span>
+                  </label>
+                </div>
+              </div>
+            )}
+
+            {/* AI Badge */}
+            <div className="mb-6 flex items-center justify-center">
+              <div className="flex items-center space-x-2 px-4 py-2 bg-gradient-to-r from-purple-50 to-blue-50 rounded-full border border-purple-200">
+                <Sparkles className="w-4 h-4 text-purple-500" />
+                <span className="text-sm text-purple-700">Powered by AI - Smart Verification</span>
               </div>
             </div>
 
@@ -523,8 +718,49 @@ export default function InterviewPage() {
                         <span className={msg.flagged ? 'text-red-700' : 'text-green-700'}>
                           Score: {msg.scores?.total}%
                         </span>
+                        {msg.aiPowered && (
+                          <span className="inline-flex items-center space-x-1 px-2 py-0.5 bg-purple-100 text-purple-700 rounded-full text-xs">
+                            <Sparkles className="w-3 h-3" />
+                            <span>AI</span>
+                          </span>
+                        )}
                       </div>
                       <p className={msg.flagged ? 'text-red-600' : 'text-green-600'}>{msg.text}</p>
+
+                      {/* AI-enriched feedback details */}
+                      {msg.flags && msg.flags.length > 0 && (
+                        <div className="mt-2 pt-2 border-t border-red-200">
+                          <p className="text-xs font-semibold text-red-700 mb-1">Concerns:</p>
+                          {msg.flags.map((flag, i) => (
+                            <p key={i} className="text-xs text-red-600">- {flag}</p>
+                          ))}
+                        </div>
+                      )}
+
+                      {msg.suggestions && msg.suggestions.length > 0 && (
+                        <div className="mt-2 pt-2 border-t border-blue-200">
+                          <p className="text-xs font-semibold text-blue-700 mb-1">Suggestions:</p>
+                          {msg.suggestions.map((suggestion, i) => (
+                            <p key={i} className="text-xs text-blue-600">- {suggestion}</p>
+                          ))}
+                        </div>
+                      )}
+
+                      {msg.factCheck && !msg.factCheck.verified && msg.factCheck.issues.length > 0 && (
+                        <div className="mt-2 pt-2 border-t border-orange-200">
+                          <p className="text-xs font-semibold text-orange-700 mb-1">Fact Check Issues:</p>
+                          {msg.factCheck.issues.map((issue, i) => (
+                            <p key={i} className="text-xs text-orange-600">- {issue}</p>
+                          ))}
+                        </div>
+                      )}
+
+                      {msg.spellingErrors && msg.spellingErrors.length > 0 && (
+                        <div className="mt-2 pt-2 border-t border-yellow-200">
+                          <p className="text-xs font-semibold text-yellow-700 mb-1">Spelling Issues:</p>
+                          <p className="text-xs text-yellow-600">{msg.spellingErrors.join(', ')}</p>
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}
@@ -550,19 +786,86 @@ export default function InterviewPage() {
 
           {/* Input Area */}
           <div className="bg-white rounded-xl shadow-lg p-4">
+            {/* Voice Status Bar */}
+            {interviewMode === 'voice' && (
+              <div className="mb-3 flex items-center justify-between">
+                <div className="flex items-center space-x-2">
+                  {isListening && (
+                    <div className="flex items-center space-x-2 text-red-500">
+                      <div className="w-3 h-3 bg-red-500 rounded-full animate-pulse" />
+                      <span className="text-sm font-medium">Listening...</span>
+                    </div>
+                  )}
+                  {isSpeaking && (
+                    <div className="flex items-center space-x-2 text-blue-500">
+                      <Volume2 className="w-4 h-4 animate-pulse" />
+                      <span className="text-sm font-medium">Speaking...</span>
+                    </div>
+                  )}
+                </div>
+                {isSpeaking && (
+                  <button
+                    onClick={stopSpeaking}
+                    className="text-sm text-gray-500 hover:text-red-500 flex items-center space-x-1"
+                  >
+                    <VolumeX className="w-4 h-4" />
+                    <span>Stop</span>
+                  </button>
+                )}
+              </div>
+            )}
+
+            {/* Interim Transcript Display */}
+            {interviewMode === 'voice' && interimTranscript && (
+              <div className="mb-3 p-2 bg-gray-50 rounded-lg border border-gray-200">
+                <p className="text-sm text-gray-500 italic">{interimTranscript}</p>
+              </div>
+            )}
+
             <div className="flex items-center space-x-3">
+              {/* Voice Mode Toggle Button */}
+              {interviewMode === 'voice' && voiceSupported && (
+                <button
+                  onClick={() => {
+                    console.log('🎤 Mic button clicked!');
+                    console.log('🎤 isListening:', isListening);
+                    if (isListening) {
+                      console.log('🎤 Stopping listening...');
+                      stopListening();
+                    } else {
+                      console.log('🎤 Starting listening...');
+                      clearTranscript();
+                      startListening();
+                    }
+                  }}
+                  disabled={isLoading || isTyping || !currentQuestion || isSpeaking}
+                  className={`p-3 rounded-xl transition-all transform hover:scale-105 ${
+                    isListening
+                      ? 'bg-red-500 text-white animate-pulse'
+                      : 'bg-blue-500 text-white hover:bg-blue-600'
+                  } ${(isLoading || isTyping || !currentQuestion || isSpeaking) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                >
+                  {isListening ? <MicOff className="w-6 h-6" /> : <Mic className="w-6 h-6" />}
+                </button>
+              )}
+
               <input
                 ref={inputRef}
                 type="text"
                 value={answer}
                 onChange={e => setAnswer(e.target.value)}
                 onKeyPress={handleKeyPress}
-                placeholder="Type your answer... (جواب لکھیں)"
+                placeholder={interviewMode === 'voice'
+                  ? "Speak or type your answer... (بولیں یا لکھیں)"
+                  : "Type your answer... (جواب لکھیں)"}
                 disabled={isLoading || isTyping || !currentQuestion}
                 className="flex-1 p-3 border-2 border-gray-200 rounded-xl focus:border-beoe-primary focus:outline-none disabled:bg-gray-100"
               />
               <button
-                onClick={submitAnswer}
+                onClick={() => {
+                  if (isListening) stopListening();
+                  submitAnswer();
+                }}
                 disabled={!answer.trim() || isLoading || isTyping}
                 className={`p-3 rounded-xl transition-all transform hover:scale-105
                   ${answer.trim() && !isLoading
@@ -577,6 +880,20 @@ export default function InterviewPage() {
                 )}
               </button>
             </div>
+
+            {/* Voice Error Display */}
+            {interviewMode === 'voice' && voiceError && (
+              <div className="mt-2 p-2 bg-red-50 border border-red-200 rounded-lg">
+                <p className="text-xs text-red-600">{voiceError}</p>
+              </div>
+            )}
+
+            {/* Voice Mode Hint */}
+            {interviewMode === 'voice' && !isListening && !isSpeaking && !voiceError && (
+              <p className="text-xs text-gray-400 mt-2 text-center">
+                Click the microphone button and speak your answer clearly
+              </p>
+            )}
           </div>
         </div>
       </main>
@@ -633,7 +950,40 @@ export default function InterviewPage() {
             <div className="bg-gray-50 rounded-xl p-6 mb-6">
               <h2 className="font-semibold text-gray-800 mb-2">Feedback</h2>
               <p className="text-gray-600">{finalResult.feedback}</p>
+              {finalResult.feedbackUrdu && (
+                <p className="text-gray-500 font-urdu mt-3 pt-3 border-t border-gray-200">{finalResult.feedbackUrdu}</p>
+              )}
             </div>
+
+            {/* Strengths */}
+            {finalResult.strengths && finalResult.strengths.length > 0 && (
+              <div className="bg-green-50 border border-green-200 rounded-xl p-6 mb-6">
+                <h2 className="font-semibold text-green-800 mb-3">Strengths</h2>
+                <ul className="space-y-2">
+                  {finalResult.strengths.map((strength, idx) => (
+                    <li key={idx} className="flex items-start text-sm text-green-900">
+                      <CheckCircle className="w-4 h-4 mr-2 mt-0.5 text-green-500 flex-shrink-0" />
+                      <span>{strength}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {/* Concerns */}
+            {finalResult.concerns && finalResult.concerns.length > 0 && (
+              <div className="bg-red-50 border border-red-200 rounded-xl p-6 mb-6">
+                <h2 className="font-semibold text-red-800 mb-3">Concerns</h2>
+                <ul className="space-y-2">
+                  {finalResult.concerns.map((concern, idx) => (
+                    <li key={idx} className="flex items-start text-sm text-red-900">
+                      <AlertTriangle className="w-4 h-4 mr-2 mt-0.5 text-red-500 flex-shrink-0" />
+                      <span>{concern}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
 
             {/* Score Breakdown */}
             <div className="mb-6">
@@ -676,6 +1026,16 @@ export default function InterviewPage() {
               </div>
             )}
 
+            {/* AI Powered Badge */}
+            {finalResult.aiPowered && (
+              <div className="mb-4 flex items-center justify-center">
+                <div className="flex items-center space-x-2 px-4 py-2 bg-gradient-to-r from-purple-50 to-blue-50 rounded-full border border-purple-200">
+                  <Sparkles className="w-4 h-4 text-purple-500" />
+                  <span className="text-sm text-purple-700">AI-Powered Evaluation</span>
+                </div>
+              </div>
+            )}
+
             {/* Actions */}
             <div className="flex flex-col sm:flex-row gap-4">
               <button
@@ -686,7 +1046,17 @@ export default function InterviewPage() {
                 <span>Practice Again</span>
               </button>
               <button
-                onClick={() => router.push('/')}
+                onClick={() => router.push('/results')}
+                className="flex-1 py-3 bg-blue-500 text-white rounded-xl font-semibold hover:bg-blue-600 transition-all flex items-center justify-center space-x-2"
+              >
+                <TrendingUp className="w-5 h-5" />
+                <span>View Combined Results</span>
+              </button>
+              <button
+                onClick={() => {
+                  console.log('Navigating to home...');
+                  router.push('/');
+                }}
                 className="flex-1 py-3 border-2 border-gray-300 text-gray-700 rounded-xl font-semibold hover:bg-gray-50 transition-all"
               >
                 Back to Home

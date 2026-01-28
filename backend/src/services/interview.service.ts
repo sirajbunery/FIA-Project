@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { logger } from '../utils/logger';
 import { getSupabaseClient } from '../config/supabase';
+import { geminiService } from './gemini.service';
 import {
   InterviewSession,
   InterviewQuestion,
@@ -26,6 +27,8 @@ interface ActiveSession {
   questions: InterviewQuestion[];
   currentIndex: number;
   previousAnswers: Map<string, string>; // For consistency checking
+  qaHistory: Array<{ question: string; answer: string }>; // For AI context
+  language: string; // 'english' or 'urdu'
 }
 
 export class InterviewService {
@@ -37,10 +40,13 @@ export class InterviewService {
    */
   async startInterview(
     visaType: InterviewVisaType,
-    destinationCountry: string
+    destinationCountry: string,
+    language: string = 'english'
   ): Promise<{ sessionId: string; firstQuestion: InterviewQuestion; totalQuestions: number }> {
     const sessionId = uuidv4();
     const questions = getQuestionsForVisaType(visaType, 10);
+
+    console.log(`📋 Generated ${questions.length} questions for ${visaType} visa, language: ${language}`);
 
     const session: InterviewSession = {
       id: sessionId,
@@ -61,6 +67,8 @@ export class InterviewService {
       questions,
       currentIndex: 0,
       previousAnswers: new Map(),
+      qaHistory: [],
+      language,
     });
 
     logger.info(`Interview started: ${sessionId} for ${visaType} visa to ${destinationCountry}`);
@@ -78,34 +86,122 @@ export class InterviewService {
   async submitAnswer(
     sessionId: string,
     answer: string,
-    responseTimeMs: number
+    responseTimeMs: number,
+    language: string = 'english'
   ): Promise<{
     scores: ScoreBreakdown;
     feedback: string;
+    feedbackUrdu?: string;
     flagged: boolean;
     flagReason?: string;
+    flags?: string[];
+    suggestions?: string[];
+    factCheck?: { verified: boolean; issues: string[] };
+    spellingErrors?: string[];
     nextQuestion?: InterviewQuestion;
     questionNumber: number;
     isComplete: boolean;
+    aiPowered: boolean;
   }> {
     const activeSession = this.activeSessions.get(sessionId);
     if (!activeSession) {
       throw new Error('Session not found or expired');
     }
 
-    const { session, questions, currentIndex, previousAnswers } = activeSession;
+    const { session, questions, currentIndex, previousAnswers, qaHistory } = activeSession;
     const currentQuestion = questions[currentIndex];
 
-    // Score the answer
-    const { scores, feedback, flagged, flagReason } = this.scoreAnswer(
-      currentQuestion,
-      answer,
-      session.visaType,
-      previousAnswers
-    );
+    let scores: ScoreBreakdown;
+    let feedback: string;
+    let feedbackUrdu: string | undefined;
+    let flagged: boolean;
+    let flagReason: string | undefined;
+    let flags: string[] = [];
+    let suggestions: string[] = [];
+    let factCheck: { verified: boolean; issues: string[] } = { verified: true, issues: [] };
+    let spellingErrors: string[] = [];
+    let aiPowered = false;
+
+    console.log('🔍 Checking Gemini availability...');
+    console.log('🔍 geminiService.isAvailable():', geminiService.isAvailable());
+
+    // Try AI-powered evaluation first
+    if (geminiService.isAvailable()) {
+      console.log('✅ Gemini IS available, starting AI evaluation...');
+      try {
+        const sessionLanguage = language || activeSession.language || 'english';
+        const aiContext = {
+          visaType: session.visaType,
+          destinationCountry: session.destinationCountry,
+          previousAnswers: qaHistory,
+          language: sessionLanguage,
+        };
+
+        console.log('🤖 Calling Gemini with context:', { visaType: session.visaType, language: sessionLanguage, qaHistoryLen: qaHistory.length });
+
+        const aiEvaluation = await geminiService.evaluateAnswer(
+          currentQuestion.text,
+          answer,
+          aiContext
+        );
+
+        console.log('🤖 Gemini evaluation result:', {
+          score: aiEvaluation.score,
+          completeness: aiEvaluation.completeness,
+          clarity: aiEvaluation.clarity,
+          relevance: aiEvaluation.relevance,
+          confidence: aiEvaluation.confidence,
+          consistency: aiEvaluation.consistency,
+          isValid: aiEvaluation.isValid,
+          flags: aiEvaluation.flags.length,
+          feedback: aiEvaluation.feedback?.substring(0, 80),
+        });
+
+        // Use AI's individual scores directly
+        scores = {
+          completeness: aiEvaluation.completeness || aiEvaluation.score,
+          clarity: aiEvaluation.clarity || aiEvaluation.score,
+          relevance: aiEvaluation.relevance || aiEvaluation.score,
+          confidence: aiEvaluation.confidence || aiEvaluation.score,
+          consistency: aiEvaluation.consistency || aiEvaluation.score,
+          total: aiEvaluation.score,
+        };
+
+        feedback = aiEvaluation.feedback;
+        feedbackUrdu = aiEvaluation.feedbackUrdu;
+        flagged = aiEvaluation.flags.length > 0 || !aiEvaluation.isValid;
+        flagReason = aiEvaluation.flags.join('; ');
+        flags = aiEvaluation.flags;
+        suggestions = aiEvaluation.suggestions;
+        factCheck = aiEvaluation.factCheck;
+        spellingErrors = aiEvaluation.spellingErrors;
+        aiPowered = true;
+
+        logger.info(`AI evaluation for session ${sessionId}: score=${aiEvaluation.score}, flags=${flags.length}`);
+      } catch (error) {
+        logger.error('AI evaluation failed, falling back to rule-based:', error);
+        // Fall back to rule-based scoring
+        const ruleBasedResult = this.scoreAnswer(currentQuestion, answer, session.visaType, previousAnswers);
+        scores = ruleBasedResult.scores;
+        feedback = ruleBasedResult.feedback;
+        flagged = ruleBasedResult.flagged;
+        flagReason = ruleBasedResult.flagReason;
+      }
+    } else {
+      // Use rule-based scoring when AI is not available
+      console.log('⚠️ Gemini NOT available, using rule-based scoring');
+      const ruleBasedResult = this.scoreAnswer(currentQuestion, answer, session.visaType, previousAnswers);
+      scores = ruleBasedResult.scores;
+      feedback = ruleBasedResult.feedback;
+      flagged = ruleBasedResult.flagged;
+      flagReason = ruleBasedResult.flagReason;
+    }
 
     // Store answer for consistency checking
     previousAnswers.set(currentQuestion.id, answer.toLowerCase());
+
+    // Store in Q&A history for AI context
+    qaHistory.push({ question: currentQuestion.text, answer });
 
     // Record the answer
     const questionAnswer: QuestionAnswer = {
@@ -128,38 +224,75 @@ export class InterviewService {
     return {
       scores,
       feedback,
+      feedbackUrdu,
       flagged,
       flagReason,
+      flags,
+      suggestions,
+      factCheck,
+      spellingErrors,
       nextQuestion,
       questionNumber: currentIndex + 1,
       isComplete,
+      aiPowered,
     };
   }
 
   /**
    * End the interview and get final results
    */
-  async endInterview(sessionId: string): Promise<InterviewSession> {
+  async endInterview(sessionId: string): Promise<InterviewSession & {
+    feedbackUrdu?: string;
+    strengths?: string[];
+    concerns?: string[];
+    aiPowered?: boolean;
+  }> {
     const activeSession = this.activeSessions.get(sessionId);
     if (!activeSession) {
       throw new Error('Session not found or expired');
     }
 
-    const { session } = activeSession;
+    const { session, qaHistory, language } = activeSession;
     session.endTime = new Date().toISOString();
 
-    // Calculate overall score
-    if (session.questionsAsked.length > 0) {
-      const totalScore = session.questionsAsked.reduce((sum, q) => sum + q.scores.total, 0);
-      session.overallScore = Math.round(totalScore / session.questionsAsked.length);
+    let feedbackUrdu: string | undefined;
+    let strengths: string[] = [];
+    let concerns: string[] = [];
+    let aiPowered = false;
+
+    console.log('📊 Ending interview, generating final assessment. AI available:', geminiService.isAvailable(), 'qaHistory:', qaHistory.length, 'language:', language);
+
+    // Try AI-powered final assessment
+    if (geminiService.isAvailable() && qaHistory.length > 0) {
+      try {
+        const aiContext = {
+          visaType: session.visaType,
+          destinationCountry: session.destinationCountry,
+          previousAnswers: qaHistory,
+          language: language || 'english',
+        };
+
+        const aiAssessment = await geminiService.generateFinalAssessment(aiContext);
+
+        session.overallScore = aiAssessment.overallScore;
+        session.passed = aiAssessment.passed;
+        session.feedback = aiAssessment.feedback;
+        session.improvements = aiAssessment.improvements;
+        feedbackUrdu = aiAssessment.feedbackUrdu;
+        strengths = aiAssessment.strengths;
+        concerns = aiAssessment.concerns;
+        aiPowered = true;
+
+        logger.info(`AI final assessment for ${sessionId}: score=${session.overallScore}, passed=${session.passed}`);
+      } catch (error) {
+        logger.error('AI final assessment failed, using rule-based:', error);
+        // Fall back to rule-based assessment
+        this.calculateRuleBasedFinalScore(session);
+      }
+    } else {
+      // Use rule-based scoring when AI is not available
+      this.calculateRuleBasedFinalScore(session);
     }
-
-    session.passed = session.overallScore >= 80;
-
-    // Generate feedback and improvements
-    const { feedback, improvements } = this.generateFeedback(session);
-    session.feedback = feedback;
-    session.improvements = improvements;
 
     // Save to database
     await this.saveSession(session);
@@ -169,7 +302,29 @@ export class InterviewService {
 
     logger.info(`Interview completed: ${sessionId}, Score: ${session.overallScore}, Passed: ${session.passed}`);
 
-    return session;
+    return {
+      ...session,
+      feedbackUrdu,
+      strengths,
+      concerns,
+      aiPowered,
+    };
+  }
+
+  /**
+   * Calculate final score using rule-based approach (fallback)
+   */
+  private calculateRuleBasedFinalScore(session: InterviewSession): void {
+    if (session.questionsAsked.length > 0) {
+      const totalScore = session.questionsAsked.reduce((sum, q) => sum + q.scores.total, 0);
+      session.overallScore = Math.round(totalScore / session.questionsAsked.length);
+    }
+
+    session.passed = session.overallScore >= 60;
+
+    const { feedback, improvements } = this.generateFeedback(session);
+    session.feedback = feedback;
+    session.improvements = improvements;
   }
 
   /**
