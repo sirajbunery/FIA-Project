@@ -47,6 +47,16 @@ export default function Home() {
     setValidationResult(result);
     setStep('result');
     setIsLoading(false);
+
+    // Store validation result in localStorage
+    const documentResult = {
+      ...result,
+      country: selectedCountry,
+      visaType: selectedVisaType,
+      travelDate,
+      timestamp: new Date().toISOString(),
+    };
+    localStorage.setItem('documentResult', JSON.stringify(documentResult));
   };
 
   const handleStartOver = () => {

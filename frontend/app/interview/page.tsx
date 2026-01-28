@@ -249,7 +249,18 @@ export default function InterviewPage() {
       });
 
       if (response.data.success) {
-        setFinalResult(response.data.result);
+        const result = response.data.result;
+        setFinalResult(result);
+
+        // Store interview result in localStorage
+        const interviewResult = {
+          ...result,
+          visaType: selectedVisa,
+          country: selectedCountry,
+          timestamp: new Date().toISOString(),
+        };
+        localStorage.setItem('interviewResult', JSON.stringify(interviewResult));
+
         setStep('result');
       }
     } catch (err) {

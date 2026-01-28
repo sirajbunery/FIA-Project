@@ -1,6 +1,7 @@
 'use client';
 
-import { CheckCircle, XCircle, AlertTriangle, RefreshCw, Phone, MapPin, ArrowRight } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { CheckCircle, XCircle, AlertTriangle, RefreshCw, Phone, MapPin, ArrowRight, BarChart3 } from 'lucide-react';
 
 interface ValidationResultData {
   status: 'READY' | 'INCOMPLETE' | 'ISSUES';
@@ -39,6 +40,7 @@ const visaTypeLabels: Record<string, { english: string; urdu: string }> = {
 };
 
 export default function ValidationResult({ result, country, visaType, onStartOver }: Props) {
+  const router = useRouter();
   const visaLabel = visaType ? visaTypeLabels[visaType] : null;
   const getStatusConfig = () => {
     switch (result.status) {
@@ -242,15 +244,22 @@ export default function ValidationResult({ result, country, visaType, onStartOve
       {/* Actions */}
       <div className="flex flex-col sm:flex-row justify-center gap-4 pt-4">
         <button
-          onClick={onStartOver}
+          onClick={() => router.push('/results')}
           className="px-6 py-3 bg-beoe-primary text-white rounded-lg font-semibold hover:bg-beoe-secondary transition-colors flex items-center justify-center space-x-2"
+        >
+          <BarChart3 className="w-5 h-5" />
+          <span>Check Combined Results</span>
+        </button>
+        <button
+          onClick={onStartOver}
+          className="px-6 py-3 border-2 border-beoe-primary text-beoe-primary rounded-lg font-semibold hover:bg-green-50 transition-colors flex items-center justify-center space-x-2"
         >
           <RefreshCw className="w-5 h-5" />
           <span>Start New Validation</span>
         </button>
         <button
           onClick={() => window.print()}
-          className="px-6 py-3 border-2 border-beoe-primary text-beoe-primary rounded-lg font-semibold hover:bg-green-50 transition-colors"
+          className="px-6 py-3 border-2 border-gray-300 text-gray-600 rounded-lg font-semibold hover:bg-gray-50 transition-colors"
         >
           Print Results
         </button>

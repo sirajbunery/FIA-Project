@@ -1,5 +1,6 @@
 import type { Metadata } from 'next'
 import './globals.css'
+import FloatingInterviewButton from '@/components/FloatingInterviewButton'
 
 export const metadata: Metadata = {
   title: 'BEOE Document Validator - Travel Document Verification for Pakistan',
@@ -22,6 +23,7 @@ export default function RootLayout({
       </head>
       <body className="min-h-screen bg-gray-50">
         {children}
+        <FloatingInterviewButton />
       </body>
     </html>
   )
