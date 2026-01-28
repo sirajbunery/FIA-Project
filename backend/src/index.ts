@@ -13,6 +13,9 @@ import { errorHandler } from './middleware/errorHandler';
 
 const app = express();
 
+// Trust proxy for Render/Vercel (required for rate limiting behind load balancer)
+app.set('trust proxy', 1);
+
 // Security middleware
 app.use(helmet());
 app.use(cors({
