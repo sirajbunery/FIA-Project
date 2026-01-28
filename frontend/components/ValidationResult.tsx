@@ -22,10 +22,24 @@ interface ValidationResultData {
 interface Props {
   result: ValidationResultData;
   country: string;
+  visaType?: string;
   onStartOver: () => void;
 }
 
-export default function ValidationResult({ result, country, onStartOver }: Props) {
+// Visa type labels for display
+const visaTypeLabels: Record<string, { english: string; urdu: string }> = {
+  tourist: { english: 'Tourist Visa', urdu: 'سیاحتی ویزا' },
+  visit: { english: 'Visit Visa', urdu: 'وزٹ ویزا' },
+  family: { english: 'Family Visa', urdu: 'فیملی ویزا' },
+  work_professional: { english: 'Work Visa (Professional)', urdu: 'ورک ویزا (پروفیشنل)' },
+  work_skilled: { english: 'Work Visa (Skilled Labor)', urdu: 'ورک ویزا (مزدور)' },
+  student: { english: 'Student Visa', urdu: 'اسٹوڈنٹ ویزا' },
+  business: { english: 'Business Visa', urdu: 'بزنس ویزا' },
+  transit: { english: 'Transit Visa', urdu: 'ٹرانزٹ ویزا' },
+};
+
+export default function ValidationResult({ result, country, visaType, onStartOver }: Props) {
+  const visaLabel = visaType ? visaTypeLabels[visaType] : null;
   const getStatusConfig = () => {
     switch (result.status) {
       case 'READY':
@@ -76,6 +90,15 @@ export default function ValidationResult({ result, country, onStartOver }: Props
         <p className={`text-lg font-urdu ${statusConfig.textColor}`}>
           {statusConfig.titleUrdu}
         </p>
+        {/* Trip Info */}
+        <div className="mt-3 text-sm text-gray-600">
+          <span className="font-medium">{country}</span>
+          {visaLabel && (
+            <span className="ml-2 px-2 py-1 bg-white rounded-full text-xs">
+              {visaLabel.english}
+            </span>
+          )}
+        </div>
         <div className="mt-4">
           <div className="inline-flex items-center space-x-2 bg-white px-4 py-2 rounded-full">
             <span className="text-gray-600">Confidence Score:</span>

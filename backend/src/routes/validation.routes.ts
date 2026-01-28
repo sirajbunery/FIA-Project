@@ -6,7 +6,14 @@ import { claudeService } from '../services/claude.service';
 import { config } from '../config';
 import { logger } from '../utils/logger';
 import { createError } from '../middleware/errorHandler';
-import { DocumentType, UploadedDocument } from '../models/types';
+import {
+  DocumentType,
+  UploadedDocument,
+  VisaType,
+  VISA_TYPE_LABELS,
+  VISA_DOCUMENT_REQUIREMENTS,
+  DOCUMENT_TYPE_LABELS,
+} from '../models/types';
 
 const router = Router();
 
@@ -16,9 +23,9 @@ const upload = multer({
   storage,
   limits: {
     fileSize: config.maxFileSize,
-    files: 10,
+    files: 15,
   },
-  fileFilter: (req, file, cb) => {
+  fileFilter: (req: Request, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
     if (config.allowedMimeTypes.includes(file.mimetype)) {
       cb(null, true);
     } else {
@@ -28,15 +35,70 @@ const upload = multer({
 });
 
 /**
+ * GET /api/validate/visa-types
+ * Get all available visa types
+ */
+router.get('/visa-types', (req: Request, res: Response) => {
+  const visaTypes = Object.entries(VISA_TYPE_LABELS).map(([type, labels]) => ({
+    type,
+    ...labels,
+  }));
+
+  res.json({
+    success: true,
+    visa_types: visaTypes,
+  });
+});
+
+/**
+ * GET /api/validate/requirements/:visaType
+ * Get document requirements for a specific visa type
+ */
+router.get('/requirements/:visaType', (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { visaType } = req.params;
+
+    if (!VISA_DOCUMENT_REQUIREMENTS[visaType as VisaType]) {
+      throw createError('Invalid visa type', 400);
+    }
+
+    const requirements = VISA_DOCUMENT_REQUIREMENTS[visaType as VisaType];
+
+    // Add labels to required and optional documents
+    const requiredDocs = requirements.required.map(type => ({
+      type,
+      ...DOCUMENT_TYPE_LABELS[type],
+    }));
+
+    const optionalDocs = requirements.optional.map(type => ({
+      type,
+      ...DOCUMENT_TYPE_LABELS[type],
+    }));
+
+    res.json({
+      success: true,
+      visa_type: visaType,
+      visa_label: VISA_TYPE_LABELS[visaType as VisaType],
+      required_documents: requiredDocs,
+      optional_documents: optionalDocs,
+      notes: requirements.notes,
+      notes_urdu: requirements.notes_urdu,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
  * POST /api/validate
  * Upload and validate documents
  */
 router.post(
   '/',
-  upload.array('documents', 10),
+  upload.array('documents', 15),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { destination_country, travel_date, document_types, user_phone } = req.body;
+      const { destination_country, visa_type, travel_date, document_types, user_phone } = req.body;
 
       if (!destination_country) {
         throw createError('Destination country is required', 400);
@@ -65,14 +127,15 @@ router.post(
         mimetype: file.mimetype,
       }));
 
-      logger.info(`Validating ${documents.length} documents for ${destination_country}`);
+      logger.info(`Validating ${documents.length} documents for ${destination_country} (${visa_type || 'unknown visa type'})`);
 
       // Run validation
       const { session, result } = await validationService.validate(
         destination_country,
         travel_date || null,
         documents,
-        user_phone || null
+        user_phone || null,
+        visa_type || null
       );
 
       // Generate response message
@@ -82,6 +145,7 @@ router.post(
         success: true,
         session_id: session.id,
         status: result.status,
+        visa_type: visa_type || null,
         result,
         message: {
           english,
@@ -100,7 +164,7 @@ router.post(
  */
 router.post('/base64', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { destination_country, travel_date, documents, user_phone } = req.body;
+    const { destination_country, visa_type, travel_date, documents, user_phone } = req.body;
 
     if (!destination_country) {
       throw createError('Destination country is required', 400);
@@ -118,14 +182,15 @@ router.post('/base64', async (req: Request, res: Response, next: NextFunction) =
       mimetype: doc.mimetype || 'image/jpeg',
     }));
 
-    logger.info(`Validating ${uploadedDocs.length} base64 documents for ${destination_country}`);
+    logger.info(`Validating ${uploadedDocs.length} base64 documents for ${destination_country} (${visa_type || 'unknown visa type'})`);
 
     // Run validation
     const { session, result } = await validationService.validate(
       destination_country,
       travel_date || null,
       uploadedDocs,
-      user_phone || null
+      user_phone || null,
+      visa_type || null
     );
 
     // Generate response message
@@ -135,6 +200,7 @@ router.post('/base64', async (req: Request, res: Response, next: NextFunction) =
       success: true,
       session_id: session.id,
       status: result.status,
+      visa_type: visa_type || null,
       result,
       message: {
         english,
@@ -165,6 +231,7 @@ router.get('/status/:sessionId', async (req: Request, res: Response, next: NextF
       session_id: session.id,
       status: session.status,
       destination_country: session.destination_country,
+      visa_type: session.visa_type,
       travel_date: session.travel_date,
       result: session.result,
       created_at: session.created_at,

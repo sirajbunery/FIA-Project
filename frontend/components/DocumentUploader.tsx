@@ -1,8 +1,8 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useDropzone } from 'react-dropzone';
-import { Upload, X, FileText, Image, ChevronLeft, CheckCircle, Loader2 } from 'lucide-react';
+import { Upload, X, FileText, ChevronLeft, CheckCircle, Loader2, AlertCircle, Info } from 'lucide-react';
 import axios from 'axios';
 
 interface UploadedFile {
@@ -11,9 +11,23 @@ interface UploadedFile {
   type: string;
 }
 
+interface DocumentRequirement {
+  type: string;
+  english: string;
+  urdu: string;
+}
+
+interface VisaRequirements {
+  required_documents: DocumentRequirement[];
+  optional_documents: DocumentRequirement[];
+  notes: string[];
+  notes_urdu: string[];
+}
+
 interface Props {
   country: string;
   travelDate: string;
+  visaType: string;
   onValidationComplete: (result: any) => void;
   onBack: () => void;
   isLoading: boolean;
@@ -21,18 +35,30 @@ interface Props {
   setError: (error: string) => void;
 }
 
-const documentTypes = [
-  { id: 'passport', label: 'Passport', urdu: 'پاسپورٹ', required: true },
-  { id: 'visa', label: 'Visa', urdu: 'ویزا', required: true },
-  { id: 'beoe_registration', label: 'BEOE Registration', urdu: 'بی ای او ای رجسٹریشن', required: false },
-  { id: 'gamca_certificate', label: 'GAMCA/Medical', urdu: 'میڈیکل سرٹیفکیٹ', required: false },
-  { id: 'airline_ticket', label: 'Airline Ticket', urdu: 'ہوائی ٹکٹ', required: true },
-  { id: 'employment_contract', label: 'Employment Contract', urdu: 'ملازمت کا معاہدہ', required: false },
+// Visa type labels for display
+const visaTypeLabels: Record<string, { english: string; urdu: string }> = {
+  tourist: { english: 'Tourist Visa', urdu: 'سیاحتی ویزا' },
+  visit: { english: 'Visit Visa', urdu: 'وزٹ ویزا' },
+  family: { english: 'Family Visa', urdu: 'فیملی ویزا' },
+  work_professional: { english: 'Work Visa (Professional)', urdu: 'ورک ویزا (پروفیشنل)' },
+  work_skilled: { english: 'Work Visa (Skilled Labor)', urdu: 'ورک ویزا (مزدور)' },
+  student: { english: 'Student Visa', urdu: 'اسٹوڈنٹ ویزا' },
+  business: { english: 'Business Visa', urdu: 'بزنس ویزا' },
+  transit: { english: 'Transit Visa', urdu: 'ٹرانزٹ ویزا' },
+};
+
+// Fallback document types if API fails
+const fallbackDocumentTypes = [
+  { type: 'passport', english: 'Passport', urdu: 'پاسپورٹ' },
+  { type: 'visa', english: 'Visa', urdu: 'ویزا' },
+  { type: 'airline_ticket', english: 'Airline Ticket', urdu: 'ہوائی ٹکٹ' },
+  { type: 'other', english: 'Other Document', urdu: 'دیگر دستاویز' },
 ];
 
 export default function DocumentUploader({
   country,
   travelDate,
+  visaType,
   onValidationComplete,
   onBack,
   isLoading,
@@ -41,6 +67,39 @@ export default function DocumentUploader({
 }: Props) {
   const [files, setFiles] = useState<UploadedFile[]>([]);
   const [selectedTypes, setSelectedTypes] = useState<Record<number, string>>({});
+  const [requirements, setRequirements] = useState<VisaRequirements | null>(null);
+  const [loadingRequirements, setLoadingRequirements] = useState(true);
+
+  // Fetch visa-specific document requirements
+  useEffect(() => {
+    const fetchRequirements = async () => {
+      if (!visaType) {
+        setLoadingRequirements(false);
+        return;
+      }
+
+      try {
+        const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
+        const response = await axios.get(`${apiUrl}/api/validate/requirements/${visaType}`);
+
+        if (response.data.success) {
+          setRequirements({
+            required_documents: response.data.required_documents,
+            optional_documents: response.data.optional_documents,
+            notes: response.data.notes,
+            notes_urdu: response.data.notes_urdu,
+          });
+        }
+      } catch (err) {
+        console.error('Failed to fetch requirements:', err);
+        // Use fallback if API fails
+      } finally {
+        setLoadingRequirements(false);
+      }
+    };
+
+    fetchRequirements();
+  }, [visaType]);
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
     const newFiles = acceptedFiles.map(file => ({
@@ -78,6 +137,24 @@ export default function DocumentUploader({
     setSelectedTypes(prev => ({ ...prev, [index]: type }));
   };
 
+  // Get all document types for dropdown
+  const getAllDocumentTypes = () => {
+    if (requirements) {
+      const allDocs = [...requirements.required_documents, ...requirements.optional_documents];
+      // Add 'other' if not present
+      if (!allDocs.find(d => d.type === 'other')) {
+        allDocs.push({ type: 'other', english: 'Other Document', urdu: 'دیگر دستاویز' });
+      }
+      return allDocs;
+    }
+    return fallbackDocumentTypes;
+  };
+
+  // Check if a document type has been uploaded
+  const isDocumentUploaded = (docType: string) => {
+    return Object.values(selectedTypes).includes(docType);
+  };
+
   const handleValidate = async () => {
     if (files.length === 0) {
       setError('Please upload at least one document');
@@ -90,6 +167,7 @@ export default function DocumentUploader({
     try {
       const formData = new FormData();
       formData.append('destination_country', country);
+      formData.append('visa_type', visaType);
       if (travelDate) {
         formData.append('travel_date', travelDate);
       }
@@ -125,6 +203,8 @@ export default function DocumentUploader({
     }
   };
 
+  const visaLabel = visaTypeLabels[visaType] || { english: visaType, urdu: '' };
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -139,28 +219,93 @@ export default function DocumentUploader({
         <div className="text-right">
           <p className="text-sm text-gray-500">Destination</p>
           <p className="font-semibold text-beoe-primary">{country}</p>
+          <p className="text-xs text-gray-600">{visaLabel.english}</p>
         </div>
       </div>
 
       <div className="text-center">
         <h2 className="text-2xl font-bold text-gray-800">Upload Your Documents</h2>
-        <p className="text-gray-600 mt-1">اپنی دستاویزات اپلوڈ کریں</p>
+        <p className="text-gray-600 mt-1 font-urdu">اپنی دستاویزات اپلوڈ کریں</p>
       </div>
 
-      {/* Document Types Checklist */}
-      <div className="bg-gray-50 rounded-lg p-4">
-        <h3 className="text-sm font-semibold text-gray-700 mb-3">Required Documents:</h3>
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-          {documentTypes.map(doc => (
-            <div key={doc.id} className="flex items-center space-x-2 text-sm">
-              <span className={doc.required ? 'text-red-500' : 'text-gray-400'}>
-                {files.some((f, i) => selectedTypes[i] === doc.id) ? '✓' : doc.required ? '•' : '○'}
-              </span>
-              <span className="text-gray-700">{doc.label}</span>
-            </div>
-          ))}
+      {/* Document Requirements Checklist */}
+      {loadingRequirements ? (
+        <div className="bg-gray-50 rounded-lg p-4 text-center">
+          <Loader2 className="w-6 h-6 animate-spin mx-auto text-gray-400" />
+          <p className="text-sm text-gray-500 mt-2">Loading requirements...</p>
         </div>
-      </div>
+      ) : requirements ? (
+        <div className="space-y-4">
+          {/* Required Documents */}
+          <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+            <h3 className="text-sm font-semibold text-red-700 mb-3 flex items-center">
+              <AlertCircle className="w-4 h-4 mr-2" />
+              Required Documents (ضروری دستاویزات)
+            </h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {requirements.required_documents.map(doc => (
+                <div key={doc.type} className="flex items-center space-x-2 text-sm">
+                  <span className={isDocumentUploaded(doc.type) ? 'text-green-600' : 'text-red-500'}>
+                    {isDocumentUploaded(doc.type) ? '✓' : '•'}
+                  </span>
+                  <span className={`${isDocumentUploaded(doc.type) ? 'text-green-700' : 'text-gray-700'}`}>
+                    {doc.english}
+                  </span>
+                  <span className="text-gray-400 font-urdu text-xs">({doc.urdu})</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Optional Documents */}
+          {requirements.optional_documents.length > 0 && (
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+              <h3 className="text-sm font-semibold text-blue-700 mb-3 flex items-center">
+                <Info className="w-4 h-4 mr-2" />
+                Optional Documents (اختیاری دستاویزات)
+              </h3>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {requirements.optional_documents.map(doc => (
+                  <div key={doc.type} className="flex items-center space-x-2 text-sm">
+                    <span className={isDocumentUploaded(doc.type) ? 'text-green-600' : 'text-gray-400'}>
+                      {isDocumentUploaded(doc.type) ? '✓' : '○'}
+                    </span>
+                    <span className="text-gray-700">{doc.english}</span>
+                    <span className="text-gray-400 font-urdu text-xs">({doc.urdu})</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Notes */}
+          {requirements.notes.length > 0 && (
+            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+              <h3 className="text-sm font-semibold text-yellow-700 mb-2">Important Notes:</h3>
+              <ul className="text-sm text-gray-700 space-y-1">
+                {requirements.notes.map((note, idx) => (
+                  <li key={idx} className="flex items-start">
+                    <span className="mr-2">•</span>
+                    <span>{note}</span>
+                  </li>
+                ))}
+              </ul>
+              {requirements.notes_urdu.length > 0 && (
+                <ul className="text-sm text-gray-600 font-urdu mt-2 space-y-1 text-right">
+                  {requirements.notes_urdu.map((note, idx) => (
+                    <li key={idx}>{note}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="bg-gray-50 rounded-lg p-4">
+          <h3 className="text-sm font-semibold text-gray-700 mb-3">Upload your travel documents:</h3>
+          <p className="text-sm text-gray-600">Passport, Visa, Tickets, and any other relevant documents</p>
+        </div>
+      )}
 
       {/* Dropzone */}
       <div
@@ -220,8 +365,8 @@ export default function DocumentUploader({
                   className="text-sm border rounded p-1"
                 >
                   <option value="other">Select type...</option>
-                  {documentTypes.map(doc => (
-                    <option key={doc.id} value={doc.id}>{doc.label}</option>
+                  {getAllDocumentTypes().map(doc => (
+                    <option key={doc.type} value={doc.type}>{doc.english}</option>
                   ))}
                 </select>
                 <button

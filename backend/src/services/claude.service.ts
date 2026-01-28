@@ -1,7 +1,15 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { config } from '../config';
 import { logger } from '../utils/logger';
-import { ValidationResult, ExtractedText, RequirementDetails, DocumentType } from '../models/types';
+import {
+  ValidationResult,
+  ExtractedText,
+  RequirementDetails,
+  DocumentType,
+  VisaType,
+  VISA_DOCUMENT_REQUIREMENTS,
+  VISA_TYPE_LABELS,
+} from '../models/types';
 
 const VALIDATION_SYSTEM_PROMPT = `You are an expert travel document validator for Pakistan's Bureau of Emigration & Overseas Employment (BEOE).
 
@@ -87,7 +95,8 @@ export class ClaudeService {
     documents: Array<{ type: DocumentType; extractedText: ExtractedText }>,
     destinationCountry: string,
     travelDate: string | null,
-    countryRequirements: RequirementDetails | null
+    countryRequirements: RequirementDetails | null,
+    visaType: VisaType | null = null
   ): Promise<ValidationResult> {
     if (!this.client) {
       return this.getDefaultValidationResult('AI service not configured');
@@ -101,11 +110,24 @@ export class ClaudeService {
         ocr_confidence: doc.extractedText.confidence,
       }));
 
+      // Get visa-specific document requirements
+      let visaRequirementsText = '';
+      if (visaType && VISA_DOCUMENT_REQUIREMENTS[visaType]) {
+        const visaReqs = VISA_DOCUMENT_REQUIREMENTS[visaType];
+        const visaLabel = VISA_TYPE_LABELS[visaType];
+        visaRequirementsText = `
+VISA TYPE: ${visaLabel.english} (${visaLabel.urdu})
+REQUIRED DOCUMENTS FOR THIS VISA: ${visaReqs.required.join(', ')}
+OPTIONAL DOCUMENTS: ${visaReqs.optional.join(', ')}
+SPECIAL NOTES: ${visaReqs.notes.join('; ')}`;
+      }
+
       const userMessage = `Please validate the following travel documents for a Pakistani traveler:
 
 DESTINATION: ${destinationCountry}
 TRAVEL DATE: ${travelDate || 'Not specified'}
 TODAY'S DATE: ${new Date().toISOString().split('T')[0]}
+${visaRequirementsText}
 
 COUNTRY REQUIREMENTS:
 ${countryRequirements ? JSON.stringify(countryRequirements, null, 2) : 'Using default requirements for ' + destinationCountry}
@@ -114,6 +136,7 @@ DOCUMENTS PROVIDED:
 ${JSON.stringify(documentsSummary, null, 2)}
 
 Based on the above information, provide a complete validation assessment.
+Check if all REQUIRED documents for the visa type are present. Mark missing required documents appropriately.
 Respond ONLY with valid JSON in this exact format:
 ${RESPONSE_FORMAT}`;
 

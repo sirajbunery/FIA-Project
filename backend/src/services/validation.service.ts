@@ -14,6 +14,8 @@ import {
   ExtractedText,
   RequirementDetails,
   UploadedDocument,
+  VisaType,
+  VISA_DOCUMENT_REQUIREMENTS,
 } from '../models/types';
 import { countryRequirementsService } from './countryRequirements.service';
 
@@ -33,12 +35,14 @@ export class ValidationService {
   async createSession(
     destinationCountry: string,
     travelDate: string | null,
-    userId: string | null
+    userId: string | null,
+    visaType: VisaType | null = null
   ): Promise<ValidationSession> {
     const session: ValidationSession = {
       id: uuidv4(),
       user_id: userId,
       destination_country: destinationCountry,
+      visa_type: visaType,
       travel_date: travelDate,
       status: 'processing',
       result: null,
@@ -134,7 +138,8 @@ export class ValidationService {
       docsForValidation,
       session.destination_country,
       session.travel_date,
-      requirements
+      requirements,
+      session.visa_type
     );
 
     // Update session with result
@@ -153,10 +158,11 @@ export class ValidationService {
     destinationCountry: string,
     travelDate: string | null,
     documents: UploadedDocument[],
-    userId: string | null = null
+    userId: string | null = null,
+    visaType: VisaType | null = null
   ): Promise<{ session: ValidationSession; result: ValidationResult }> {
     // Create session
-    const session = await this.createSession(destinationCountry, travelDate, userId);
+    const session = await this.createSession(destinationCountry, travelDate, userId, visaType);
 
     // Process documents
     const processedDocs = await this.processDocuments(session.id, documents);
