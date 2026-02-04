@@ -1,0 +1,37 @@
+pipeline {
+    agent any
+
+    stages {
+
+        stage('Clone') {
+            steps {
+                git 'https://github.com/sirajbunery/FIA-Project.git'
+            }
+        }
+
+        stage('Install Dependencies') {
+            steps {
+                dir('backend') {
+                    sh 'npm install'
+                }
+            }
+        }
+
+        stage('Build') {
+            steps {
+                dir('backend') {
+                    sh 'npm run build || echo "No build step"
+                }
+            }
+        }
+
+        stage('Run Server') {
+            steps {
+                sh '''
+                pm2 delete fia-backend || true
+                pm2 start backend/dist/index.js --name fia-backend
+                '''
+            }
+        }
+    }
+}
